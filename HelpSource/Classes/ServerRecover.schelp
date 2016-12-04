@@ -22,7 +22,19 @@ Code examples:
 
 code::
 
-// test regular boot and accidental quit:
+//
+// find all server processes on this machine:
+ServerRecover.findProcesses;
+// for example:
+-> [ ( 'username': adc, 'pid': 36998, 'port': 57110 ) ]
+
+// find the pid for the port I want to use
+ServerRecover.pidForPort(57110);
+// for example:
+-> 36998
+
+
+// first, test regular boot and accidental quit:
 // kill all servers first
 unixCmd("killall scsynth supernova");
 // server address port is free, could boot now
@@ -34,17 +46,28 @@ unixCmd("killall scsynth supernova");
 s.serverRunning;
 
 
-// now induce the zombie problem:
+// now demonstrate the zombie problem:
 
 unixCmd("killall scsynth supernova");
 // start an scsynth instance by hand to simulate a zombie:
 x = (Server.program + s.options.asOptionsString(57110)).unixCmd;
-// now server port is used, and boot would fail ...
+// now server port is used, and regular boot would fail ...
 s.addr.portIsFree;
 
-// recover option 1 is 'failAndAsk':
+// recover option 1 is 'failAndAsk', which informs about options 2-4:
 ServerRecover.default.cs;
 s.boot;
+//////////// posts : //////////////
+// ServerRecover 'failAndAsk' for server 'localhost' - options:
+// There is already a server using port 57110. You can
+// * force-reboot the server:
+ServerRecover.default = 'reboot'; s.boot;
+// * or find a different port and boot:
+ServerRecover.default = 'useFreePort;' s.boot;
+// * or hijack the existing server:
+ServerRecover.default = 'hijack;' s.boot;
+//////////////////////////////////
+
 
 // recover option 2 is 'hijack' - assumes it is a zombie and reuses that,
 ServerRecover.default = \hijack;
@@ -52,23 +75,23 @@ ServerRecover.default = \hijack;
 s.addr.sendMsg("/s_new", \default, 1234);
 // hijacking sends a freeAll command
 s.boot;
-s.serverRunning; // it is running now
-s.pidRunning;    // but cannot know its pid
+s.serverRunning; // it knows it is running now
+s.pidRunning;    // and has been told its hijacked pid
 
-////////////// HERE hijacked server does not find out it is dead! ///////////
 unixCmd("killall scsynth supernova");
-s.serverRunning; // still thinks it is running -why?
-s.pidRunning;    // but does not know its pid
+s.serverRunning; // knows it is dead
+s.pid;  		// and no pid anymore
 
 
-// option 3 is 'reboot' - this is safer. kill the old scsynth, boot the server
+// recover option 3 is 'reboot' - this is safer:
+// kills the old scsynth, then boots the server.
 // create zombie first
-s.quit;
 x = (Server.program + s.options.asOptionsString(57110)).unixCmd;
 ServerRecover.default = \reboot;
 s.boot;
 
-////////////// HERE \reboot post TWICE - why? /////////////
+////////////// \reboot runs and posts TWICE - why? /////////////
+
 
 // option 3 is 'useFreePort' - this is more polite:
 // other programs on this machine may use port 57110,
@@ -100,8 +123,11 @@ s.addr; // moved port out of the way.
 
 CLASSMETHODS::
 
-METHOD:: default
-the name of the default strategy to use
+METHOD:: findProcesses
+get info for all running scsynth (or supernova) processes.
+
+METHOD:: pidForPort
+get the pid for the given port number, or nil if none found.
 
 METHOD:: bootStrategies
 a dictionary of all the strategies

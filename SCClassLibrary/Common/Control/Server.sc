@@ -657,6 +657,17 @@ Server {
 
 	pidRunning { ^pid.notNil and: { pid.pidRunning } }
 
+	// only use this for hijacking a server
+	prSetPid { |inPid|
+		pid = inPid;
+		String.unixCmdActions.put(pid, {
+			"server '%': % process has ended.\n".postf(this.name, program.basename);
+			statusWatcher.serverRunning = false;
+			pid = nil;
+			statusWatcher.quit(watchShutDown:false)
+		})
+	}
+
 	ping { |n = 1, wait = 0.1, func|
 		var result = 0, pingFunc;
 		if(statusWatcher.serverRunning.not) { "server not running".inform; ^this };
