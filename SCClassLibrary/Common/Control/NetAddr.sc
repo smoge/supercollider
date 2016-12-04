@@ -209,6 +209,23 @@ NetAddr {
 
 	isLocal { ^this.class.matchLangIP(this.ip) }
 
+	portIsFree { |protocol = \udp, post = false|
+		var cmd = "lsof -b -iUDP | grep %".format(this.port);
+		var str = unixCmdGetStdOut("lsof -b -iUDP | grep %".format(this.port));
+		var res = str.size == 0;
+
+		if (post) {
+			if (res) {
+				cmd.postcs;
+				"%: port is free.\n".postf(this.cs);
+			} {
+				"%: port is used:\n".postf(this.cs);
+				str.postcs;
+			}
+		};
+		^res
+	}
+
 	ip {
 		^addr.asIPString
 	}

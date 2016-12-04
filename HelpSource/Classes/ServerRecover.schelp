@@ -1,0 +1,91 @@
+TITLE:: ServerRecover
+summary:: Strategies for servers to recover when booting shows port conflicts
+categories:: Control
+related:: Classes/Server
+
+
+DESCRIPTION::
+
+When trying to boot a server, the server may find that there is already a process
+using the desired port number. This can have several reasons, and several strategies.
+
+* It may be a server zombie from a language crash.
+One can recover by hijacking that server, or reboot it.
+
+* It may be an scsynth or supernova program run by another application.
+One can recover by switching to a different port number.
+
+* In more complex network music settings, one can add further custom
+strategies to ServerRecover.
+
+First code examples:
+
+code::
+// the default method is to fail and ask the user
+ServerRecover.default.cs;
+
+// induce the problem:
+// kill all servers first
+Server.killAll;
+// server address port is free, could boot now
+s.addr.portIsFree;
+// start an scsynth instance by hand to simulate a zombie:
+x = (Server.program + s.options.asOptionsString(57110)).unixCmd;
+// now server port is used, and boot would fail ...
+s.addr.portIsFree;
+// and it does 'failAndAsk':
+s.boot;
+
+// if it is a zombie and seems re-usable, you can hijack it
+ServerRecover.default = \hijack;
+// for annoyance, add a dangling note to the zombie
+s.addr.sendMsg("/s_new", \default, 1234);
+// hijacking sends freeAll
+s.boot;
+
+// safer - reboot the server
+Server.killAll;
+// create zombie first
+x = (Server.program + s.options.asOptionsString(57110)).unixCmd;
+ServerRecover.default = \reboot;
+s.boot;
+s.freeAll;
+
+// if other programs on this machine may use port 57110,
+// for instance to run scsynth instances at that default port,
+// you can also switch to a free port number
+s.quit;
+x = (Server.program + s.options.asOptionsString(57110)).unixCmd;
+ServerRecover.default = \useFreePort;
+s.boot;
+
+// test case for multi-servers:
+
+(
+// make sure there are no scsynth processed around
+Server.killAll;
+// Start three servers, as if by other programs, or zombies
+x = (Server.program + s.options.asOptionsString(57110)).unixCmd;
+x = (Server.program + s.options.asOptionsString(57109)).unixCmd;
+x = (Server.program + s.options.asOptionsString(57108)).unixCmd;
+)
+
+ServerRecover.default = \useFreePort;
+s.boot;
+s.addr; // moved out of the way.
+
+
+::
+
+CLASSMETHODS::
+
+METHOD:: default
+the name of the default strategy to use
+
+METHOD:: bootStrategies
+a dictionary of all the strategies
+
+METHOD:: at
+argument:: key
+get strategy at key, or default.
+
