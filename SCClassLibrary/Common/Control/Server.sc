@@ -640,6 +640,22 @@ Server {
 		condition.wait;
 	}
 
+	findZombies { |wait = 0.1, trueFunc, falseFunc|
+		var foundZombie = false;
+		fork {
+			this.sync;
+			foundZombie = true;
+			trueFunc.value;
+		};
+		fork {
+			wait.wait;
+			if (foundZombie.not) {
+				falseFunc.value;
+			};
+		}
+	}
+
+	pidRunning { ^pid.notNil and: { pid.pidRunning } }
 
 	ping { |n = 1, wait = 0.1, func|
 		var result = 0, pingFunc;
@@ -790,352 +806,365 @@ Server {
 	}
 
 
-bootInit { | recover = false |
-	if(recover) { this.newNodeAllocators } { this.newAllocators };
-	if(dumpMode != 0) { this.sendMsg(\dumpOSC, dumpMode) };
-	if(sendQuit.isNil) {
-		sendQuit = this.inProcess or: { this.isLocal };
-	};
-	this.connectSharedMemory;
-	this.initTree;
-}
-
-bootServerApp { |onComplete|
-	if(inProcess) {
-		"booting internal".inform;
-		this.bootInProcess;
-		pid = thisProcess.pid;
-	} {
-		this.disconnectSharedMemory;
-		pid = unixCmd(program ++ options.asOptionsString(addr.port), { statusWatcher.quit(watchShutDown:false) });
-		("booting server '%' on address: %:%").format(this.name, addr.hostname, addr.port.asString).inform;
-		if(options.protocol == \tcp, { addr.tryConnectTCP(onComplete) }, onComplete);
+	bootInit { | recover = false |
+		if(recover) { this.newNodeAllocators } { this.newAllocators };
+		if(dumpMode != 0) { this.sendMsg(\dumpOSC, dumpMode) };
+		if(sendQuit.isNil) {
+			sendQuit = this.inProcess or: { this.isLocal };
+		};
+		this.connectSharedMemory;
+		this.initTree;
 	}
-}
 
-reboot { |func, onFailure| // func is evaluated when server is off
-	if(isLocal.not) { "can't reboot a remote server".inform; ^this };
-	if(statusWatcher.serverRunning and: { this.unresponsive.not }) {
-		this.quit({
+	bootServerApp { |onComplete|
+		var myprogram = program;
+		if(inProcess) {
+			"booting internal".inform;
+			this.bootInProcess;
+			pid = thisProcess.pid;
+		} {
+			this.disconnectSharedMemory;
+			pid = unixCmd(myprogram ++ options.asOptionsString(addr.port), {
+				"server '%': % process has ended.\n".postf(this.name, myprogram.basename);
+				statusWatcher.serverRunning = false;
+				statusWatcher.quit(watchShutDown:false)
+			});
+			("booting server '%' on address: %:%").format(this.name, addr.hostname, addr.port.asString).inform;
+			if(options.protocol == \tcp, { addr.tryConnectTCP(onComplete) }, onComplete);
+		}
+	}
+
+	reboot { |func, onFailure| // func is evaluated when server is off
+		if(isLocal.not) { "can't reboot a remote server".inform; ^this };
+		if(statusWatcher.serverRunning and: { this.unresponsive.not }) {
+			this.quit({
+				func.value;
+				defer { this.boot }
+			}, onFailure);
+		} {
 			func.value;
-			defer { this.boot }
-		}, onFailure);
-	} {
-		func.value;
-		this.boot(onFailure: onFailure);
-	}
-}
-
-applicationRunning {
-	^pid.tryPerform(\pidRunning) == true
-}
-
-status {
-	addr.sendStatusMsg // backward compatibility
-}
-
-sendStatusMsg {
-	addr.sendStatusMsg
-}
-
-notify {
-	^statusWatcher.notify
-}
-
-notify_ { |flag|
-	statusWatcher.notify_(flag)
-}
-
-notified {
-	^statusWatcher.notified
-}
-
-dumpOSC { |code = 1|
-	/*
-	0 - turn dumping OFF.
-	1 - print the parsed contents of the message.
-	2 - print the contents in hexadecimal.
-	3 - print both the parsed and hexadecimal representations of the contents.
-	*/
-	dumpMode = code;
-	this.sendMsg(\dumpOSC, code);
-	this.changed(\dumpOSC, code);
-}
-
-quit { |onComplete, onFailure, watchShutDown = true|
-	var func;
-
-	addr.sendMsg("/quit");
-
-	if(watchShutDown and: { this.unresponsive }) {
-		"Server '%' was unresponsive. Quitting anyway.".format(name).postln;
-		watchShutDown = false;
-	};
-
-	if(options.protocol == \tcp) {
-		statusWatcher.quit({ addr.tryDisconnectTCP(onComplete, onFailure) }, nil, watchShutDown);
-	} {
-		statusWatcher.quit(onComplete, onFailure, watchShutDown);
-	};
-
-	if(inProcess) {
-		this.quitInProcess;
-		"quit done\n".inform;
-	} {
-		"'/quit' sent\n".inform;
-	};
-
-	pid = nil;
-	sendQuit = nil;
-
-	if(scopeWindow.notNil) { scopeWindow.quit };
-	if(volume.isPlaying) { volume.free };
-	RootNode(this).freeAll;
-	this.newAllocators;
-}
-
-*quitAll { |watchShutDown = true|
-	all.do { |server|
-		if(server.sendQuit === true) {
-			server.quit(watchShutDown: watchShutDown)
+			this.boot(onFailure: onFailure);
 		}
 	}
-}
 
-*killAll {
-	// if you see Exception in World_OpenUDP: unable to bind udp socket
-	// its because you have multiple servers running, left
-	// over from crashes, unexpected quits etc.
-	// you can't cause them to quit via OSC (the boot button)
+	applicationRunning {
+		^pid.tryPerform(\pidRunning) == true
+	}
 
-	// this brutally kills them all off
-	thisProcess.platform.killAll(this.program.basename);
-	this.quitAll(watchShutDown: false);
-}
+	status {
+		addr.sendStatusMsg // backward compatibility
+	}
 
-freeAll {
-	this.sendMsg("/g_freeAll", 0);
-	this.sendMsg("/clearSched");
-	this.initTree;
-}
+	sendStatusMsg {
+		addr.sendStatusMsg
+	}
 
-*freeAll { |evenRemote = false|
-	if(evenRemote) {
+	notify {
+		^statusWatcher.notify
+	}
+
+	notify_ { |flag|
+		statusWatcher.notify_(flag)
+	}
+
+	notified {
+		^statusWatcher.notified
+	}
+
+	dumpOSC { |code = 1|
+		/*
+		0 - turn dumping OFF.
+		1 - print the parsed contents of the message.
+		2 - print the contents in hexadecimal.
+		3 - print both the parsed and hexadecimal representations of the contents.
+		*/
+		dumpMode = code;
+		this.sendMsg(\dumpOSC, code);
+		this.changed(\dumpOSC, code);
+	}
+
+	quit { |onComplete, onFailure, watchShutDown = true|
+		var func;
+
+		addr.sendMsg("/quit");
+
+		if(watchShutDown and: { this.unresponsive }) {
+			"Server '%' was unresponsive. Quitting anyway.".format(name).postln;
+			watchShutDown = false;
+		};
+
+		if(options.protocol == \tcp) {
+			statusWatcher.quit({ addr.tryDisconnectTCP(onComplete, onFailure) }, nil, watchShutDown);
+		} {
+			statusWatcher.quit(onComplete, onFailure, watchShutDown);
+		};
+
+		if(inProcess) {
+			this.quitInProcess;
+			"quit done\n".inform;
+		} {
+			"'/quit' sent\n".inform;
+		};
+
+		pid = nil;
+		sendQuit = nil;
+
+		if(scopeWindow.notNil) { scopeWindow.quit };
+		if(volume.isPlaying) { volume.free };
+		RootNode(this).freeAll;
+		this.newAllocators;
+	}
+
+	*quitAll { |watchShutDown = true|
 		all.do { |server|
-			if( server.serverRunning ) { server.freeAll }
-		}
-	} {
-		all.do { |server|
-			if(server.isLocal and:{ server.serverRunning }) { server.freeAll }
+			if(server.sendQuit === true) {
+
+				server.quit(watchShutDown: watchShutDown)
+			};
+			// temp fix, should eventually work without it
+			defer ({
+				// just to make sure
+				server.statusWatcher.stop;
+				server.statusWatcher.serverRunning = false;
+				[server, server.serverRunning].postln;
+			}, 0.1)
 		}
 	}
-}
 
-*hardFreeAll { |evenRemote = false|
-	if(evenRemote) {
-		all.do { |server|
-			server.freeAll
-		}
-	} {
-		all.do { |server|
-			if(server.isLocal) { server.freeAll }
+	*killAll {
+		// if you see Exception in World_OpenUDP: unable to bind udp socket
+		// its because you have multiple servers running, left
+		// over from crashes, unexpected quits etc.
+		// you can't cause them to quit via OSC (the boot button)
+
+		// this brutally kills them all off
+		thisProcess.platform.killAll(this.program.basename);
+		this.quitAll(watchShutDown: false);
+	}
+
+	freeAll {
+		this.sendMsg("/g_freeAll", 0);
+		this.sendMsg("/clearSched");
+		this.initTree;
+	}
+
+	*freeAll { |evenRemote = false|
+		if(evenRemote) {
+			all.do { |server|
+				if( server.serverRunning ) { server.freeAll }
+			}
+		} {
+			all.do { |server|
+				if(server.isLocal and:{ server.serverRunning }) { server.freeAll }
+			}
 		}
 	}
-}
 
-*allRunningServers {
-	^this.all.select(_.serverRunning)
-}
+	*hardFreeAll { |evenRemote = false|
+		if(evenRemote) {
+			all.do { |server|
+				server.freeAll
+			}
+		} {
+			all.do { |server|
+				if(server.isLocal) { server.freeAll }
+			}
+		}
+	}
 
-/* volume control */
+	*allRunningServers {
+		^this.all.select(_.serverRunning)
+	}
 
-volume_ { | newVolume |
-	volume.volume_(newVolume)
-}
+	/* volume control */
 
-mute {
-	volume.mute
-}
+	volume_ { | newVolume |
+		volume.volume_(newVolume)
+	}
 
-unmute {
-	volume.unmute
-}
+	mute {
+		volume.mute
+	}
 
-/* recording output */
+	unmute {
+		volume.unmute
+	}
 
-record { |path, bus, numChannels, node, duration| recorder.record(path, bus, numChannels, node, duration) }
-isRecording { ^recorder.isRecording }
-pauseRecording { recorder.pauseRecording }
-stopRecording { recorder.stopRecording }
-prepareForRecord { |path, numChannels| recorder.prepareForRecord(path, numChannels) }
+	/* recording output */
 
-recordNode {
-	this.deprecated(thisMethod);
-	^recorder.recordNode
-}
+	record { |path, bus, numChannels, node, duration| recorder.record(path, bus, numChannels, node, duration) }
+	isRecording { ^recorder.isRecording }
+	pauseRecording { recorder.pauseRecording }
+	stopRecording { recorder.stopRecording }
+	prepareForRecord { |path, numChannels| recorder.prepareForRecord(path, numChannels) }
 
-/* internal server commands */
+	recordNode {
+		this.deprecated(thisMethod);
+		^recorder.recordNode
+	}
 
-bootInProcess {
-	^options.bootInProcess;
-}
-quitInProcess {
-	_QuitInProcessServer
-	^this.primitiveFailed
-}
-allocSharedControls { |numControls=1024|
-	_AllocSharedControls
-	^this.primitiveFailed
-}
-setSharedControl { |num, value|
-	_SetSharedControl
-	^this.primitiveFailed
-}
-getSharedControl { |num|
-	_GetSharedControl
-	^this.primitiveFailed
-}
+	/* internal server commands */
 
-prPingApp { |func, onFailure, timeout = 3|
-	var id = func.hash;
-	var resp = OSCFunc({ |msg| if(msg[1] == id, { func.value; task.stop }) }, "/synced", addr);
-	var task = timeout !? { fork { timeout.wait; resp.free;  onFailure.value } };
-	addr.sendMsg("/sync", id);
-}
+	bootInProcess {
+		^options.bootInProcess;
+	}
+	quitInProcess {
+		_QuitInProcessServer
+		^this.primitiveFailed
+	}
+	allocSharedControls { |numControls=1024|
+		_AllocSharedControls
+		^this.primitiveFailed
+	}
+	setSharedControl { |num, value|
+		_SetSharedControl
+		^this.primitiveFailed
+	}
+	getSharedControl { |num|
+		_GetSharedControl
+		^this.primitiveFailed
+	}
 
-/* CmdPeriod support for Server-scope and Server-record and Server-volume */
+	prPingApp { |func, onFailure, timeout = 3|
+		var id = func.hash;
+		var resp = OSCFunc({ |msg| if(msg[1] == id, { func.value; task.stop }) }, "/synced", addr);
+		var task = timeout !? { fork { timeout.wait; resp.free;  onFailure.value } };
+		addr.sendMsg("/sync", id);
+	}
 
-cmdPeriod {
-	addr = addr.recover;
-	this.changed(\cmdPeriod)
-}
+	/* CmdPeriod support for Server-scope and Server-record and Server-volume */
 
-queryAllNodes { | queryControls = false |
-	var resp, done = false;
-	if(isLocal) {
-		this.sendMsg("/g_dumpTree", 0, queryControls.binaryValue)
-	} {
-		resp = OSCFunc({ |msg|
-			var i = 2, tabs = 0, printControls = false, dumpFunc;
-			if(msg[1] != 0) { printControls = true };
-			("NODE TREE Group" + msg[2]).postln;
-			if(msg[3] > 0) {
-				dumpFunc = {|numChildren|
-					var j;
-					tabs = tabs + 1;
-					numChildren.do {
-						if(msg[i + 1] >= 0) { i = i + 2 } {
-							i = i + 3 + if(printControls) { msg[i + 3] * 2 + 1 } { 0 };
-						};
-						tabs.do { "   ".post };
-						msg[i].post; // nodeID
-						if(msg[i + 1] >= 0) {
-							" group".postln;
-							if(msg[i + 1] > 0) { dumpFunc.value(msg[i + 1]) };
-						} {
-							(" " ++ msg[i + 2]).postln; // defname
-							if(printControls) {
-								if(msg[i + 3] > 0) {
-									" ".post;
-									tabs.do { "   ".post };
-								};
-								j = 0;
-								msg[i + 3].do {
-									" ".post;
-									if(msg[i + 4 + j].isMemberOf(Symbol)) {
-										(msg[i + 4 + j] ++ ": ").post;
+	cmdPeriod {
+		addr = addr.recover;
+		this.changed(\cmdPeriod)
+	}
+
+	queryAllNodes { | queryControls = false |
+		var resp, done = false;
+		if(isLocal) {
+			this.sendMsg("/g_dumpTree", 0, queryControls.binaryValue)
+		} {
+			resp = OSCFunc({ |msg|
+				var i = 2, tabs = 0, printControls = false, dumpFunc;
+				if(msg[1] != 0) { printControls = true };
+				("NODE TREE Group" + msg[2]).postln;
+				if(msg[3] > 0) {
+					dumpFunc = {|numChildren|
+						var j;
+						tabs = tabs + 1;
+						numChildren.do {
+							if(msg[i + 1] >= 0) { i = i + 2 } {
+								i = i + 3 + if(printControls) { msg[i + 3] * 2 + 1 } { 0 };
+							};
+							tabs.do { "   ".post };
+							msg[i].post; // nodeID
+							if(msg[i + 1] >= 0) {
+								" group".postln;
+								if(msg[i + 1] > 0) { dumpFunc.value(msg[i + 1]) };
+							} {
+								(" " ++ msg[i + 2]).postln; // defname
+								if(printControls) {
+									if(msg[i + 3] > 0) {
+										" ".post;
+										tabs.do { "   ".post };
 									};
-									msg[i + 5 + j].post;
-									j = j + 2;
-								};
-								"\n".post;
+									j = 0;
+									msg[i + 3].do {
+										" ".post;
+										if(msg[i + 4 + j].isMemberOf(Symbol)) {
+											(msg[i + 4 + j] ++ ": ").post;
+										};
+										msg[i + 5 + j].post;
+										j = j + 2;
+									};
+									"\n".post;
+								}
 							}
-						}
+						};
+						tabs = tabs - 1;
 					};
-					tabs = tabs - 1;
+					dumpFunc.value(msg[3]);
 				};
-				dumpFunc.value(msg[3]);
-			};
-			done = true;
-		}, '/g_queryTree.reply', addr).oneShot;
+				done = true;
+			}, '/g_queryTree.reply', addr).oneShot;
 
-		this.sendMsg("/g_queryTree", 0, queryControls.binaryValue);
-		SystemClock.sched(3, {
-			if(done.not) {
-				resp.free;
-				"Remote server failed to respond to queryAllNodes!".warn;
-			};
-		})
+			this.sendMsg("/g_queryTree", 0, queryControls.binaryValue);
+			SystemClock.sched(3, {
+				if(done.not) {
+					resp.free;
+					"Remote server failed to respond to queryAllNodes!".warn;
+				};
+			})
+		}
 	}
-}
 
-printOn { |stream|
-	stream << name;
-}
-
-storeOn { |stream|
-	var codeStr = switch(this,
-		Server.default, { if(sync_s) { "s" } { "Server.default" } },
-		Server.local,	{ "Server.local" },
-		Server.internal, { "Server.internal" },
-		{ "Server.fromName(" + name.asCompileString + ")" }
-	);
-	stream << codeStr;
-}
-
-archiveAsCompileString { ^true }
-archiveAsObject { ^true }
-
-getControlBusValue {|busIndex|
-	if(serverInterface.isNil) {
-		Error("Server-getControlBusValue only supports local servers").throw;
-	} {
-		^serverInterface.getControlBusValue(busIndex)
+	printOn { |stream|
+		stream << name;
 	}
-}
 
-getControlBusValues {|busIndex, busChannels|
-	if(serverInterface.isNil) {
-		Error("Server-getControlBusValues only supports local servers").throw;
-	} {
-		^serverInterface.getControlBusValues(busIndex, busChannels)
+	storeOn { |stream|
+		var codeStr = switch(this,
+			Server.default, { if(sync_s) { "s" } { "Server.default" } },
+			Server.local,	{ "Server.local" },
+			Server.internal, { "Server.internal" },
+			{ "Server.fromName(" + name.asCompileString + ")" }
+		);
+		stream << codeStr;
 	}
-}
 
-setControlBusValue {|busIndex, value|
-	if(serverInterface.isNil) {
-		Error("Server-getControlBusValue only supports local servers").throw;
-	} {
-		^serverInterface.setControlBusValue(busIndex, value)
+	archiveAsCompileString { ^true }
+	archiveAsObject { ^true }
+
+	getControlBusValue {|busIndex|
+		if(serverInterface.isNil) {
+			Error("Server-getControlBusValue only supports local servers").throw;
+		} {
+			^serverInterface.getControlBusValue(busIndex)
+		}
 	}
-}
 
-setControlBusValues {|busIndex, valueArray|
-	if(serverInterface.isNil) {
-		Error("Server-getControlBusValues only supports local servers").throw;
-	} {
-		^serverInterface.setControlBusValues(busIndex, valueArray)
+	getControlBusValues {|busIndex, busChannels|
+		if(serverInterface.isNil) {
+			Error("Server-getControlBusValues only supports local servers").throw;
+		} {
+			^serverInterface.getControlBusValues(busIndex, busChannels)
+		}
 	}
-}
 
-*scsynth {
-	this.program = this.program.replace("supernova", "scsynth")
-}
+	setControlBusValue {|busIndex, value|
+		if(serverInterface.isNil) {
+			Error("Server-getControlBusValue only supports local servers").throw;
+		} {
+			^serverInterface.setControlBusValue(busIndex, value)
+		}
+	}
 
-*supernova {
-	this.program = this.program.replace("scsynth", "supernova")
-}
+	setControlBusValues {|busIndex, valueArray|
+		if(serverInterface.isNil) {
+			Error("Server-getControlBusValues only supports local servers").throw;
+		} {
+			^serverInterface.setControlBusValues(busIndex, valueArray)
+		}
+	}
 
-/* backward compatibility */
+	*scsynth {
+		this.program = this.program.replace("supernova", "scsynth")
+	}
 
-*set {
-	this.deprecated(thisMethod, this.class.findMethod('all'));
-	^all
-}
+	*supernova {
+		this.program = this.program.replace("scsynth", "supernova")
+	}
 
-*set_ { |item|
-	this.deprecated(thisMethod, this.class.findMethod('all_'));
-	all = item
-}
+	/* backward compatibility */
+
+	*set {
+		this.deprecated(thisMethod, this.class.findMethod('all'));
+		^all
+	}
+
+	*set_ { |item|
+		this.deprecated(thisMethod, this.class.findMethod('all_'));
+		all = item
+	}
 
 }

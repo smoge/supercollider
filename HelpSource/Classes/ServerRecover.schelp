@@ -18,43 +18,64 @@ One can recover by switching to a different port number.
 * In more complex network music settings, one can add further custom
 strategies to ServerRecover.
 
-First code examples:
+Code examples:
 
 code::
-// the default method is to fail and ask the user
-ServerRecover.default.cs;
 
-// induce the problem:
+// test regular boot and accidental quit:
 // kill all servers first
-Server.killAll;
+unixCmd("killall scsynth supernova");
 // server address port is free, could boot now
 s.addr.portIsFree;
+// regular boot, should work fine
+s.boot;
+// now simulate server crash with unixCmd, not Server.killAll;
+unixCmd("killall scsynth supernova");
+s.serverRunning;
+
+
+// now induce the zombie problem:
+
+unixCmd("killall scsynth supernova");
 // start an scsynth instance by hand to simulate a zombie:
 x = (Server.program + s.options.asOptionsString(57110)).unixCmd;
 // now server port is used, and boot would fail ...
 s.addr.portIsFree;
-// and it does 'failAndAsk':
+
+// recover option 1 is 'failAndAsk':
+ServerRecover.default.cs;
 s.boot;
 
-// if it is a zombie and seems re-usable, you can hijack it
+// recover option 2 is 'hijack' - assumes it is a zombie and reuses that,
 ServerRecover.default = \hijack;
 // for annoyance, add a dangling note to the zombie
 s.addr.sendMsg("/s_new", \default, 1234);
-// hijacking sends freeAll
+// hijacking sends a freeAll command
 s.boot;
+s.serverRunning; // it is running now
+s.pidRunning;    // but cannot know its pid
 
-// safer - reboot the server
-Server.killAll;
+////////////// HERE hijacked server does not find out it is dead! ///////////
+unixCmd("killall scsynth supernova");
+s.serverRunning; // still thinks it is running -why?
+s.pidRunning;    // but does not know its pid
+
+
+// option 3 is 'reboot' - this is safer. kill the old scsynth, boot the server
 // create zombie first
+s.quit;
 x = (Server.program + s.options.asOptionsString(57110)).unixCmd;
 ServerRecover.default = \reboot;
 s.boot;
-s.freeAll;
 
-// if other programs on this machine may use port 57110,
-// for instance to run scsynth instances at that default port,
-// you can also switch to a free port number
-s.quit;
+////////////// HERE \reboot post TWICE - why? /////////////
+
+// option 3 is 'useFreePort' - this is more polite:
+// other programs on this machine may use port 57110,
+// for instance to run scsynth instances at the default port.
+// 'useFreePort'  finds a free port number, and boots server with that port.
+// Switching to a free port number by hand would also work.
+unixCmd("killall scsynth supernova");
 x = (Server.program + s.options.asOptionsString(57110)).unixCmd;
 ServerRecover.default = \useFreePort;
 s.boot;
@@ -63,7 +84,7 @@ s.boot;
 
 (
 // make sure there are no scsynth processed around
-Server.killAll;
+unixCmd("killall scsynth supernova");
 // Start three servers, as if by other programs, or zombies
 x = (Server.program + s.options.asOptionsString(57110)).unixCmd;
 x = (Server.program + s.options.asOptionsString(57109)).unixCmd;
@@ -72,7 +93,7 @@ x = (Server.program + s.options.asOptionsString(57108)).unixCmd;
 
 ServerRecover.default = \useFreePort;
 s.boot;
-s.addr; // moved out of the way.
+s.addr; // moved port out of the way.
 
 
 ::

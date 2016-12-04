@@ -85,7 +85,7 @@ ServerStatusWatcher {
 					postError = (onFailure.value(server) == false);
 				};
 				if(postError) {
-					"Server '%' on failed to start. You may need to kill all servers".format(server.name).error;
+					"Server '%' failed to start. You may need to kill all servers".format(server.name).error;
 				};
 				serverBooting = false;
 				server.changed(\serverRunning);
@@ -126,11 +126,12 @@ ServerStatusWatcher {
 		}
 	}
 
+	// should be start
+	addStatusWatcher { this.start }
 
-	addStatusWatcher {
+	start {
 		if(statusWatcher.isNil) {
-			statusWatcher =
-			OSCFunc({ arg msg;
+			statusWatcher = OSCFunc({ arg msg;
 				var cmd, one;
 				if(notify and: { notified.not }) { this.sendNotifyRequest };
 				alive = true;
@@ -146,12 +147,14 @@ ServerStatusWatcher {
 		}
 	}
 
-	stopStatusWatcher {
-		statusWatcher !? { statusWatcher.disable }
-	}
+	stopStatusWatcher { this.stop }
+
+	stop { statusWatcher !? { statusWatcher.disable } }
+
+	enabled { ^statusWatcher.enabled }
 
 	startAliveThread { | delay = 0.0 |
-		this.addStatusWatcher;
+		this.start;
 		^aliveThread ?? {
 			aliveThread = Routine {
 				// this thread polls the server to see if it is alive
@@ -160,7 +163,7 @@ ServerStatusWatcher {
 					alive = false;
 					server.sendStatusMsg;
 					aliveThreadPeriod.wait;
-					this.updateRunningState(alive);
+					this.updateRunningState(alive or: server.pidRunning);
 				};
 			}.play(AppClock);
 			aliveThread

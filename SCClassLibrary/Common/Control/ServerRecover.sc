@@ -44,9 +44,9 @@ ServerRecover {
 			\hijack: { |server, onSuccess, onFailure|
 				var portIsFree = false, addr = server.addr;
 				"// ServerRecover.at('hijack') for server '%':\n".postf(server.name);
-				server.statusWatcher.serverRunning = true;
-				// how to get pid then?
-				defer ({ server.freeAll; }, 0.2);
+				server.startAliveThread;
+				// how to get the pid then? from port address scan?
+				defer ({ server.freeAll; }, 0.1);
 			},
 		)
 	}
