@@ -1,0 +1,82 @@
+title:: Remote Servers
+categories:: Server
+summary:: How to use remote servers
+related:: Classes/Server, Classes/NetAddr
+
+code::
+
+// set up a multichannel server for several clients
+(
+s.options.numInputBusChannels = 8;
+s.options.numOutputBusChannels = 8;
+s.options.numAudioBusChannels;
+s.options.numPublicAudioBusChannels;
+s.options.numPrivateAudioBusChannels;
+s.options.firstPrivateBus;
+
+s.options.maxLogins = 32;
+)
+
+// Q: maybe options should know their servers,
+//    and inform/warn what can't be changed after server is booted?
+
+// set clientID before booting.
+// (can also be changed after server is booted, but may lose track of id ranges)
+s.clientID = 1; // default
+s.clientID = 2; // informs about change
+s.clientID = 32;
+
+// refused for different reasons
+s.clientID = \abc; // illegal
+s.clientID = -1;
+s.clientID = 33;
+
+// back to default
+s.options.maxLogins = 32; s.clientID = 1;
+s.boot;
+s.queryAllNodes; // default group nodeID is clientID
+s.clientID;
+s.makeWindow;
+s.scope;
+
+
+// three ways to make sound, all go to group 1
+x = { Saw.ar(330) * 0.1 }.play(s);
+s.queryAllNodes;
+(amp: 0.2, dur: 5).play;
+s.queryAllNodes;
+Ndef(\noyz, { BrownNoise.ar([0.1, 0.1]) }).play;
+s.queryAllNodes;
+x.free;
+Ndef(\noyz).end;
+
+
+r = Server.remote(\pseudo12, s.addr, s.options, 12);
+r.defaultGroup; // group 12, like clientID
+s.queryAllNodes;
+
+r.boot;  // don't need boot, assumes already running
+r.makeWindow;
+
+s.queryAllNodes; // sees all nodes on server not just my own
+
+// three ways to make sound, all go to group 1
+
+y = { Saw.ar * 0.1 }.play(r);
+r.queryAllNodes;
+(amp: 0.2, dur: 5, server: r).play;
+r.queryAllNodes;
+Ndef(\noyz -> r.name, { Dust.ar([20, 20]) }).play;
+s.queryAllNodes;
+y.free;
+Ndef(\noyz -> r.name).end;
+s.queryAllNodes;
+
+// buffers work on either server
+p = Platform.resourceDir +/+ "sounds/a11wlk01.wav";
+a = Buffer.read(s, p);
+a.play;
+
+b = Buffer.read(r, p);
+b.play;
+::
