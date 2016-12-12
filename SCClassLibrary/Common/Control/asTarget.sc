@@ -1,5 +1,5 @@
 +Server {
-	asTarget { ^Group.basicNew(this, 1) }
+	asTarget { ^defaultGroup }
 	asNodeID { ^0 }
 }
 

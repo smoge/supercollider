@@ -241,7 +241,7 @@ Event : Environment {
 
 				synthLib: nil,
 
-				group: 1,
+				// group: 1,
 				out: 0,
 				addAction: 0,
 
@@ -357,7 +357,7 @@ Event : Environment {
 				delta: 0,
 
 				addAction: 0,
-				group: 1,
+				// group: 1, // or better #{ ~server.group ?? 1 } later,
 				latency: 0.2,
 				instrument: \default,
 				hasGate: true,
@@ -419,6 +419,8 @@ Event : Environment {
 					~finish.value;
 
 					server = ~server ?? { Server.default };
+					"event group: %\n".postf(~group);
+					~group = ~group ?? { server.defaultGroup };
 
 					tempo = ~tempo;
 					if (tempo.notNil) {

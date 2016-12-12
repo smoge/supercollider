@@ -2,8 +2,8 @@ ServerOptions {
 	// order of variables is important here. Only add new instance variables to the end.
 	var <numAudioBusChannels=1024;
 	var <>numControlBusChannels=16384;
-	var <numInputBusChannels=2;
-	var <numOutputBusChannels=2;
+	var <>numInputBusChannels=8;
+	var <>numOutputBusChannels=8;
 	var <>numBuffers=1026;
 
 	var <>maxNodes=1024;
@@ -38,8 +38,6 @@ ServerOptions {
 	var <>threads = nil; // for supernova
 	var <>useSystemClock = false;  // for supernova
 
-	var <numPrivateAudioBusChannels=112;
-
 	var <>reservedNumAudioBusChannels = 0;
 	var <>reservedNumControlBusChannels = 0;
 	var <>reservedNumBuffers = 0;
@@ -53,6 +51,12 @@ ServerOptions {
 	var <>recChannels = 2;
 	var <>recBufSize = nil;
 
+	var myServers;
+
+	addServer { |serv|
+		myServers = myServers ?? { Set[] };
+		myServers.add(serv);
+	}
 
 	device {
 		^if(inDevice == outDevice) {
@@ -71,7 +75,7 @@ ServerOptions {
 		o = if(protocol == \tcp, " -t ", " -u ");
 		o = o ++ port;
 
-		o = o ++ " -a " ++ (numPrivateAudioBusChannels + numInputBusChannels + numOutputBusChannels) ;
+		o = o ++ " -a " ++ numAudioBusChannels;
 
 		if (numControlBusChannels != 16384, {
 			o = o ++ " -c " ++ numControlBusChannels;
@@ -161,8 +165,17 @@ ServerOptions {
 		^o
 	}
 
-	firstPrivateBus { // after the outs and ins
+	numPublicAudioBusChannels {
 		^numOutputBusChannels + numInputBusChannels
+	}
+
+	numPrivateAudioBusChannels {
+		^numAudioBusChannels - this.numPublicAudioBusChannels
+	}
+
+	// bus index after the hardware outs and ins
+	firstPrivateBus {
+		^this.numPublicAudioBusChannels
 	}
 
 	bootInProcess {
@@ -170,29 +183,6 @@ ServerOptions {
 		^this.primitiveFailed
 	}
 
-	numPrivateAudioBusChannels_ { |numChannels = 112|
-		numPrivateAudioBusChannels = numChannels;
-		this.recalcChannels;
-	}
-
-	numAudioBusChannels_ { |numChannels=1024|
-		numAudioBusChannels = numChannels;
-		numPrivateAudioBusChannels = numAudioBusChannels - numInputBusChannels - numOutputBusChannels;
-	}
-
-	numInputBusChannels_ { |numChannels=8|
-		numInputBusChannels = numChannels;
-		this.recalcChannels;
-	}
-
-	numOutputBusChannels_ { |numChannels=8|
-		numOutputBusChannels = numChannels;
-		this.recalcChannels;
-	}
-
-	recalcChannels {
-		numAudioBusChannels = numPrivateAudioBusChannels + numInputBusChannels + numOutputBusChannels;
-	}
 
 	*prListDevices {
 		arg in, out;
@@ -271,6 +261,7 @@ Server {
 
 	var <nodeAllocator, <controlBusAllocator, <audioBusAllocator, <bufferAllocator, <scopeBufferAllocator;
 
+	var <defaultGroup;
 	var <>tree;
 
 	var <syncThread, <syncTasks;
@@ -301,6 +292,17 @@ Server {
 	}
 
 	*new { |name, addr, options, clientID|
+		var foundServer = named.at(name.asSymbol);
+
+		if (foundServer.notNil) {
+			if ([addr, options, clientID].any(_.notNil)) {
+				warn("Server % already exists, ignoring addr: % options % clientID."
+					.format(name, addr, options, clientID)
+				);
+			};
+			^foundServer
+		};
+
 		^super.new.init(name, addr, options, clientID)
 	}
 
@@ -314,8 +316,11 @@ Server {
 	init { |argName, argAddr, argOptions, argClientID|
 		this.addr = argAddr;
 		options = argOptions ? ServerOptions.new;
-		clientID = argClientID ? 0;
 		if(argClientID.notNil) { userSpecifiedClientID = true };
+		clientID = argClientID ? 1;
+
+		defaultGroup = Group.basicNew(this, clientID);
+		this.sendMsg("/g_new", defaultGroup.nodeID, 0, 0);
 
 		this.newAllocators;
 
@@ -349,7 +354,7 @@ Server {
 
 	initTree {
 		nodeAllocator = NodeIDAllocator(clientID, options.initialNodeID);
-		this.sendMsg("/g_new", 1, 0, 0);
+		this.sendMsg("/g_new", defaultGroup.nodeID, 0, 0);
 		tree.value(this);
 		ServerTree.run(this);
 	}
@@ -357,14 +362,28 @@ Server {
 	/* id allocators */
 
 	clientID_ { |val|
+
+		if (clientID == val) { ^this };
+
 		if(val.isInteger.not) {
-			"Server % couldn't set client id to: %".format(name, val.asCompileString).warn;
+			"Server % couldn't set client id to: %"
+			.format(name, val.asCompileString).warn;
 			^this
 		};
-		if(clientID != val) {
-			clientID = val;
-			this.newAllocators;
-		}
+		// must be within 1 .. maxLogins (e.g. 32)
+		if (val < 1 or: { val > options.maxLogins }) {
+			"Server % couldn't set clientID to: % - out of range %."
+			.format(this, val, [1, options.maxLogins]).warn;
+			^this
+		};
+		clientID = val;
+		"Server % changed clientID to: % - making new allocators.\n"
+		.postf(this, clientID);
+		this.newAllocators;
+
+		// defaultGroups get nodeIDs from 1 .. maxLogins
+		defaultGroup = Group.basicNew(this, clientID);
+		this.initTree;
 	}
 
 	newAllocators {
@@ -376,45 +395,36 @@ Server {
 	}
 
 	newNodeAllocators {
-		nodeAllocator = NodeIDAllocator(clientID, options.initialNodeID)
+		nodeAllocator = NodeIDAllocator(clientID - 1, options.initialNodeID)
 	}
 
 	newBusAllocators {
-		var numControl, numAudio;
-		var controlBusOffset, audioBusOffset;
-		var offset = this.calcOffset;
-		var n = options.maxLogins ? 1;
+		var numClients = options.maxLogins ? 1;
+		var clientOffset = this.clientID - 1;
+		var numControlBuses = options.numControlBusChannels div: numClients;
+		var numAudioBuses = options.numPrivateAudioBusChannels div: numClients;
+		var controlBusOffset = (numControlBuses * clientOffset)
+		+ options.reservedNumControlBusChannels;
 
-		numControl = options.numControlBusChannels div: n;
-		numAudio = options.numPrivateAudioBusChannels div: n;
+		var audioBusOffset = options.numPublicAudioBusChannels
+		+ (numAudioBuses * clientOffset)
+		+ options.reservedNumAudioBusChannels;
 
-		controlBusOffset = numControl * offset + options.reservedNumControlBusChannels;
-		audioBusOffset = options.firstPrivateBus + (numAudio * offset) + options.reservedNumAudioBusChannels;
+		"controlBusOffset: % \n".postf(controlBusOffset);
+		"audioBusOffset: % \n".postf(audioBusOffset);
 
-		controlBusAllocator =
-		ContiguousBlockAllocator.new(numControl, controlBusOffset);
+		controlBusAllocator = ContiguousBlockAllocator.new(numControlBuses, controlBusOffset);
 
-		audioBusAllocator =
-		ContiguousBlockAllocator.new(numAudio, audioBusOffset);
+		audioBusAllocator = ContiguousBlockAllocator.new(numAudioBuses, audioBusOffset);
 	}
-
 
 	newBufferAllocators {
-		var bufferOffset;
-		var offset = this.calcOffset;
-		var n = options.maxLogins ? 1;
-		var numBuffers = options.numBuffers div: n;
-		bufferOffset = numBuffers * offset + options.reservedNumBuffers;
-		bufferAllocator =
-		ContiguousBlockAllocator.new(numBuffers, bufferOffset);
-	}
-
-	calcOffset {
-		if(options.maxLogins.isNil) { ^0 };
-		if(clientID > (options.maxLogins - 1)) {
-			"Client ID exceeds maxLogins. Some buses and buffers may overlap for remote server: %".format(this).warn;
-		};
-		^clientID % options.maxLogins
+		var numClients = options.maxLogins ? 1;
+		var clientOffset = this.clientID - 1;
+		var numBuffers = options.numBuffers div: numClients;
+		var bufferOffset = (numBuffers * clientOffset)
+		+ options.reservedNumBuffers;
+		bufferAllocator = ContiguousBlockAllocator.new(numBuffers, bufferOffset);
 	}
 
 	newScopeBufferAllocators {
@@ -699,10 +709,6 @@ Server {
 		^Buffer.cachedBufferAt(this, bufnum)
 	}
 
-	defaultGroup {
-		^Group.basicNew(this, 1)
-	}
-
 	inputBus {
 		^Bus(\audio, this.options.numOutputBusChannels, this.options.numInputBusChannels, this)
 	}
@@ -954,7 +960,7 @@ Server {
 	}
 
 	freeAll {
-		this.sendMsg("/g_freeAll", 0);
+		this.sendMsg("/g_freeAll", defaultGroup.nodeID);
 		this.sendMsg("/clearSched");
 		this.initTree;
 	}

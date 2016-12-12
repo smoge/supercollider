@@ -4,7 +4,7 @@ NodeIDAllocator {
 	// support 32 users
 
 	*new { arg user=0, initTemp = 1000;
-		if (user > 31) { "NodeIDAllocator user id > 31".error; ^nil };
+		// if (user > 31) { "NodeIDAllocator user id > 31".error; ^nil };
 		^super.newCopyArgs(user, initTemp).reset
 	}
 	reset {
@@ -193,24 +193,31 @@ ContiguousBlock {
 	printOn { |stream| this.storeOn(stream) }
 }
 
-
+// second arg was pos, but clientID is more important
 ContiguousBlockAllocator {
-	var	size, array, freed, pos, top;
+	var	size, clientOffset, pos, top, array, freed;
 
-	*new { |size, pos = 0|
-		^super.newCopyArgs(size, Array.newClear(size).put(pos, ContiguousBlock(pos, size-pos)),
-			IdentityDictionary.new, pos, pos);
+	*new { |size, clientOffset = 0, pos = 0|
+		^super.newCopyArgs(size,
+			clientOffset,
+			pos,
+			pos,
+			Array.newClear(size).put(pos, ContiguousBlock(pos, size-pos)),
+			IdentityDictionary.new
+		);
 	}
 
 	alloc { |n = 1|
 		var	block;
 		(block = this.findAvailable(n)).notNil.if({
-			^this.prReserve(block.start, n, block).start
+			^this.prReserve(block.start, n, block).start + clientOffset;
 		}, { ^nil });
 	}
 
 	reserve { |address, size = 1, warn = true|
 		var	block, new;
+		address = address - clientOffset;
+
 		((block = array[address] ?? { this.findNext(address) }).notNil and:
 				{ block.used and:
 				{ address + size > block.start } }).if({
@@ -236,8 +243,8 @@ ContiguousBlockAllocator {
 	}
 
 	free { |address|
-		var	block,
-			prev, next, temp;
+		var	block, prev, next, temp;
+		address = address - clientOffset;
 		// this 'if' prevents an error if a Buffer object is freed twice
 		if(address.isNil) { ^this };
 		((block = array[address]).notNil and: { block.used }).if({
@@ -296,6 +303,7 @@ ContiguousBlockAllocator {
 	}
 
 	findPrevious { |address|
+		address = address - clientOffset;
 		forBy(address-1, pos, -1, { |i|
 			array[i].notNil.if({ ^array[i] });
 		});
@@ -304,6 +312,7 @@ ContiguousBlockAllocator {
 
 	findNext { |address|
 		var	temp;
+		address = address - clientOffset;
 		(temp = array[address]).notNil.if({
 			^array[temp.start + temp.size]
 		}, {
@@ -316,6 +325,7 @@ ContiguousBlockAllocator {
 
 	prReserve { |address, size, availBlock, prevBlock|
 		var	new, leftover;
+		address = address - clientOffset;
 		(availBlock.isNil and: { prevBlock.isNil }).if({
 			prevBlock = this.findPrevious(address);
 		});
