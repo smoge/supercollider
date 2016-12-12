@@ -235,6 +235,9 @@ A function that is called when quit has completed.
 argument::onFailure
 A function that is called when quit has failed.
 
+argument::watchShutDown
+A boolean whether to watch status during shutdown.
+
 
 method:: reboot
 quit and restart the server application
@@ -576,8 +579,11 @@ method:: prepareForRecord
 Allocates the necessary buffer, etc. for recording the server's output. (See code::record:: below.)
 argument:: path
 a link::Classes/String:: representing the path and name of the output file.
+argument:: numChannels
+the number of channels to prepare for.
 discussion::
 If you do not specify a path than a file will be created in your recordings folder (see the note above on this) called SC_thisDateAndTime. Changes to the header or sample format, or to the number of channels must be made strong::before:: calling this.
+
 
 method:: record
 Starts or resumes recording the output.
